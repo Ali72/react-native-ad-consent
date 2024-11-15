@@ -1,5 +1,8 @@
 package de.bnass.RNAdConsent;
 
+import android.app.Activity;
+
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 
 import java.util.Map;
@@ -15,6 +18,7 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableMap;
 
 import com.google.android.ump.ConsentDebugSettings;
+import com.google.android.ump.ConsentForm;
 import com.google.android.ump.ConsentInformation;
 import com.google.android.ump.ConsentRequestParameters;
 import com.google.android.ump.FormError;
@@ -26,17 +30,65 @@ public class RNAdConsentModule extends ReactContextBaseJavaModule {
     private static final String E_ACTIVITY_NOT_AVAILABLE = "E_ACTIVITY_NOT_AVAILABLE";
     private static final String E_ACTIVITY_NOT_AVAILABLE_MSG = "Activity is not available.";
 
-    private ConsentInformation consentInformation;
+    private final ConsentInformation consentInformation;
 
     public RNAdConsentModule(ReactApplicationContext reactContext) {
         super(reactContext);
         consentInformation = UserMessagingPlatform.getConsentInformation(reactContext);
     }
 
+    @NonNull
     @Override
     public String getName() {
         return "RNAdConsent";
     }
+
+
+    private String getConsentStatusString(int consentStatus) {
+        switch (consentStatus) {
+            case ConsentInformation.ConsentStatus.REQUIRED:
+                return "REQUIRED";
+            case ConsentInformation.ConsentStatus.NOT_REQUIRED:
+                return "NOT_REQUIRED";
+            case ConsentInformation.ConsentStatus.OBTAINED:
+                return "OBTAINED";
+            case ConsentInformation.ConsentStatus.UNKNOWN:
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    private String getPrivacyOptionsRequirementStatusString(
+            ConsentInformation.PrivacyOptionsRequirementStatus privacyOptionsRequirementStatus) {
+        switch (privacyOptionsRequirementStatus) {
+            case REQUIRED:
+                return "REQUIRED";
+            case NOT_REQUIRED:
+                return "NOT_REQUIRED";
+            case UNKNOWN:
+            default:
+                return "UNKNOWN";
+        }
+    }
+
+    private WritableMap getConsentInformation() {
+        WritableMap consentStatusMap = Arguments.createMap();
+        String consentStatus = getConsentStatusString(consentInformation.getConsentStatus());
+        boolean isRequestLocationInEeaOrUnknown = !consentStatus.equals("NOT_REQUIRED") ;
+
+        consentStatusMap.putString(
+                "consentStatus", consentStatus);
+        consentStatusMap.putBoolean("canRequestAds", consentInformation.canRequestAds());
+        consentStatusMap.putString(
+                "privacyOptionsRequirementStatus",
+                getPrivacyOptionsRequirementStatusString(
+                        consentInformation.getPrivacyOptionsRequirementStatus()));
+        consentStatusMap.putBoolean(
+                "isConsentFormAvailable", consentInformation.isConsentFormAvailable());
+        consentStatusMap.putBoolean("isRequestLocationInEeaOrUnknown", isRequestLocationInEeaOrUnknown);
+        return consentStatusMap;
+    }
+
 
     @Override
     public Map<String, Object> getConstants() {
@@ -77,8 +129,8 @@ public class RNAdConsentModule extends ReactContextBaseJavaModule {
 
             if (config.hasKey("testDeviceIds")) {
                 ReadableArray testDeviceIds = config.getArray("testDeviceIds");
-
-                for (int i = 0; i < testDeviceIds.size(); i++) {
+                int arraySize = testDeviceIds != null ? testDeviceIds.size() : 0;
+                for (int i = 0; i < arraySize; i++) {
                     debugSettingsBuilder.addTestDeviceHashedId(testDeviceIds.getString(i));
                 }
             }
@@ -95,28 +147,20 @@ public class RNAdConsentModule extends ReactContextBaseJavaModule {
 
             ConsentRequestParameters consentRequestParameters = paramsBuilder.build();
 
-            if (getCurrentActivity() == null) {
+            Activity currentActivity = getCurrentActivity();
+
+            if (currentActivity == null) {
                 promise.reject(E_ACTIVITY_NOT_AVAILABLE, E_ACTIVITY_NOT_AVAILABLE_MSG);
                 return;
             }
 
             consentInformation.requestConsentInfoUpdate(
-                    getCurrentActivity(),
+                    currentActivity,
                     consentRequestParameters,
                     new ConsentInformation.OnConsentInfoUpdateSuccessListener() {
                         @Override
                         public void onConsentInfoUpdateSuccess() {
-                            int consentStatus = consentInformation.getConsentStatus();
-                            boolean isRequestLocationInEeaOrUnknown = consentStatus != ConsentInformation.ConsentStatus.NOT_REQUIRED;
-
-                            WritableMap payload = Arguments.createMap();
-                            payload.putBoolean("canRequestAds", consentInformation.canRequestAds());
-                            payload.putInt("consentStatus", consentStatus);
-                            payload.putBoolean("isConsentFormAvailable", consentInformation.isConsentFormAvailable());
-                            payload.putBoolean("isRequestLocationInEeaOrUnknown", isRequestLocationInEeaOrUnknown);
-                            payload.putInt("privacyOptionsRequirementStatus", consentInformation.getPrivacyOptionsRequirementStatus().ordinal());
-
-                            promise.resolve(payload);
+                            promise.resolve(getConsentInformation());
                         }
                     },
                     new ConsentInformation.OnConsentInfoUpdateFailureListener() {
@@ -134,7 +178,9 @@ public class RNAdConsentModule extends ReactContextBaseJavaModule {
     @ReactMethod
     public void UMP_showConsentForm(final Promise promise) {
         try {
-            if (getCurrentActivity() == null) {
+            Activity currentActivity = getCurrentActivity();
+
+            if (currentActivity == null) {
                 promise.reject(E_ACTIVITY_NOT_AVAILABLE, E_ACTIVITY_NOT_AVAILABLE_MSG);
                 return;
             }
@@ -146,21 +192,16 @@ public class RNAdConsentModule extends ReactContextBaseJavaModule {
                             getReactApplicationContext().getApplicationContext(),
                             new UserMessagingPlatform.OnConsentFormLoadSuccessListener() {
                                 @Override
-                                public void onConsentFormLoadSuccess(com.google.android.ump.ConsentForm consentForm) {
+                                public void onConsentFormLoadSuccess(ConsentForm consentForm) {
                                     consentForm.show(
-                                            getCurrentActivity(),
-                                            new com.google.android.ump.ConsentForm.OnConsentFormDismissedListener() {
+                                            currentActivity,
+                                            new ConsentForm.OnConsentFormDismissedListener() {
                                                 @Override
                                                 public void onConsentFormDismissed(@Nullable FormError formError) {
                                                     if (formError != null) {
                                                         promise.reject("" + formError.getErrorCode(), formError.getMessage());
                                                     } else {
-                                                        WritableMap payload = Arguments.createMap();
-                                                        payload.putBoolean("canRequestAds", consentInformation.canRequestAds());
-                                                        payload.putInt("consentStatus", consentInformation.getConsentStatus());
-                                                        payload.putInt("privacyOptionsRequirementStatus", consentInformation.getPrivacyOptionsRequirementStatus().ordinal());
-
-                                                        promise.resolve(payload);
+                                                        promise.resolve(getConsentInformation());
                                                     }
                                                 }
                                             });
